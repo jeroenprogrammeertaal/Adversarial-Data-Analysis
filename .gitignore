@@ -3,3 +3,6 @@ data/
 
 # Ignore results
 results/
+
+# Ignore models
+*.pth

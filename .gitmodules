@@ -1,0 +1,3 @@
+[submodule "text-adversarial-attack"]
+	path = text-adversarial-attack
+	url = git@github.com:facebookresearch/text-adversarial-attack.git
