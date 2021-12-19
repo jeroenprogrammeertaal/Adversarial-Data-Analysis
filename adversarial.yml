@@ -5,9 +5,10 @@ dependencies:
   - python=3.9.5
   - torchvision
   - pytorch
-  - cudatoolkit=10.2
+  - cudatoolkit=11.3
   - torchaudio
   - matplotlib
   - transformers
   - datasets
   - bert_score
+  - tqdm
