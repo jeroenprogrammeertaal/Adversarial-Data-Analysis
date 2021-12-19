@@ -1,0 +1,13 @@
+name: adversarial
+channels:
+  - defaults
+dependencies:
+  - python=3.9.5
+  - torchvision
+  - pytorch
+  - cudatoolkit=10.2
+  - torchaudio
+  - matplotlib
+  - transformers
+  - datasets
+  - bert_score
