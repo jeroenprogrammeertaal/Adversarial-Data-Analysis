@@ -15,6 +15,12 @@ def prepare_model(name:str):
         model = AutoModelForSequenceClassification.from_pretrained("google/bert_uncased_L-2_H-128_A-2", num_labels=3)
         tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         return model, tokenizer
+    if name == "bert":
+        model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=3)
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    if name == "roberta":
+        model = AutoModelForSequenceClassification.from_pretrained("roberta-base", num_labels=3)
+        tokenizer = AutoTokenizer.from_pretrained("roberta-base")
 
 class Trainer:
 
