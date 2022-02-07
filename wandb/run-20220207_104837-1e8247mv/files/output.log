@@ -1,0 +1,74 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+100%|█████████████████████████████████████████████████████████████▉| 529/530 [02:46<00:00,  5.55it/s]Traceback (most recent call last):
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_snli.py", line 223, in <module>
+    trainer.train()
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_snli.py", line 131, in train
+    self.logger.log_cartography()
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_utils.py", line 72, in log_cartography
+    data = np.array([
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_utils.py", line 74, in <listcomp>
+    np.std(self.label_probabilities[split][x])["label_prob"],
+  File "<__array_function__ internals>", line 5, in std
+  File "/home/jeroen/miniconda3/envs/adversarial/lib/python3.9/site-packages/numpy/core/fromnumeric.py", line 3581, in std
+    return _methods._std(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+  File "/home/jeroen/miniconda3/envs/adversarial/lib/python3.9/site-packages/numpy/core/_methods.py", line 262, in _std
+    ret = _var(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+  File "/home/jeroen/miniconda3/envs/adversarial/lib/python3.9/site-packages/numpy/core/_methods.py", line 225, in _var
+    arrmean = arrmean.dtype.type(arrmean / rcount)
+AttributeError: 'collections.defaultdict' object has no attribute 'dtype'

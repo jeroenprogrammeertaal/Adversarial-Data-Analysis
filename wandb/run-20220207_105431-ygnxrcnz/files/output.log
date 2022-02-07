@@ -1,0 +1,67 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+100%|█████████████████████████████████████████████████████████████▉| 529/530 [02:45<00:00,  5.46it/s]Traceback (most recent call last):
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_snli.py", line 223, in <module>
+    trainer.train()
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_snli.py", line 131, in train
+    self.logger.log_cartography()
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_utils.py", line 82, in log_cartography
+    self.log_scatter(data, split)
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_utils.py", line 62, in log_scatter
+    sns.scatter_plot(data[:, 1], data[:, 0], hue=data[:,2], hue_norm=(0, 1))
+AttributeError: module 'seaborn' has no attribute 'scatter_plot'

@@ -6,3 +6,4 @@ results/
 
 # Ignore models
 *.pth
+*.pt

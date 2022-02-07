@@ -1,0 +1,58 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+100%|█████████████████████████████████████████████████████████████▉| 529/530 [01:39<00:00,  5.62it/s]Traceback (most recent call last):
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_snli.py", line 247, in <module>
+    trainer.train()
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_snli.py", line 169, in train
+    self.export_weights(epoch)
+  File "/home/jeroen/Documents/Master/Adversarial Analysis/train_snli.py", line 202, in export_weights
+    path = f"{self.save_dir}/{self.config['dataset_name']}/"
+AttributeError: 'Trainer' object has no attribute 'save_dir'
