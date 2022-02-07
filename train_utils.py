@@ -104,6 +104,7 @@ class DataProcessor:
 
     def __init__(self, dataset_name, tokenizer, train_config):
         self.data_config = LOAD_CONFIGS[dataset_name]
+        self.data_config["cache_dir"] = train_config["dataset_cache_dir"]
         self.tokenizer = tokenizer
         self.train_config = train_config
         self.dataset = self.prepare_dataset()
