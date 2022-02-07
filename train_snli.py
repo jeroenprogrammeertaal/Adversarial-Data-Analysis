@@ -185,6 +185,8 @@ if __name__ == "__main__":
                         help="Name of model to train. Choose from: 'test'.")
     parser.add_argument("--dataset_name", type=str, default="snli",
                         help="Name of dataset to train on.")
+    parser.add_argument("--dataset_cache_dir", type=str, default="data",
+                        help="Cache directory of data.")
     parser.add_argument("--train_splits", type=str, nargs='+', default=["train"],
                         help="Name(s) of splits to use for training.")
     parser.add_argument("--validation_splits", type=str, nargs='+', default=["validation"],
