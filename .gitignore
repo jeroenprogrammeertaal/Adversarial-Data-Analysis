@@ -6,4 +6,7 @@ results/
 
 # Ignore models
 *.pth
-*.pt
+*.pth
+
+# Ignore wandb logs
+wandb/
