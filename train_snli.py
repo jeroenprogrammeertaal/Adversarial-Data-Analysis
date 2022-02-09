@@ -151,7 +151,6 @@ class Trainer:
             
             # Gather predictions for dataset cartography
             self.validate(train_loader, "train", epoch)
-            self.validate(test_loader, "test", epoch)
 
         self.export_weights(epoch)
         self.logger.log_cartography()
@@ -245,7 +244,11 @@ if __name__ == "__main__":
     
     model, tokenizer = prepare_model(args["model_name"])
     dataprocessor = DataProcessor(args["dataset_name"], tokenizer, args)
-    split_sizes = {split: dataprocessor.get_split_n_examples(split) for split in ["train", "validation", "test"]}
+    split_sizes = {
+        "train": sum([dataprocessor.get_split_n_examples(split) for split in args['train_splits']]),
+        "validation": sum([dataprocessor.get_split_n_examples(split) for split in args['validation_splits']]),
+        "test": sum([dataprocessor.get_split_n_examples(split) for split in args['test_splits']])
+    }
     logger = Logger(args, split_sizes)
     trainer = Trainer(model, dataprocessor, logger, args)
     trainer.train()

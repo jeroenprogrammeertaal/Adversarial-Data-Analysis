@@ -66,7 +66,7 @@ class Logger:
         plt.close()
 
     def log_scatter(self, data, split):
-        sns.scatterplot(data[:, 0], data[:, 1], hue=data[:, 2], hue_norm=(0, 1))
+        sns.scatterplot(data[:, 1], data[:, 0], hue=data[:, 2], hue_norm=(0, 1))
         plt.xlabel("Variability")
         plt.ylabel("Confidence")
         wandb.log({f"{split}/variability_confidence_plot": wandb.Image(plt)})
@@ -110,6 +110,7 @@ class DataProcessor:
         self.data_config["cache_dir"] = train_config["dataset_cache_dir"]
         self.tokenizer = tokenizer
         self.train_config = train_config
+        self.batch_columns = ["idx"] + self.tokenizer.model_input_names + ["label"]
         self.dataset = self.prepare_dataset()
         self.dataloaders = self.prepare_dataloaders()
 
@@ -128,12 +129,14 @@ class DataProcessor:
         #TODO: tokenize with batch_size=batch_size, shuffle when loading, pad by longest in batch.
         dataset = get_dataset(self.data_config["dataset"], **self.data_config)
         dataset = dataset.shuffle(self.train_config["seed"])
+        dataset = dataset.filter(lambda x: 0 <= x["label"] < 3)
+        if "gold" in dataset.column_names:
+            dataset = dataset.rename_column("gold", "label")
 
         tokenized_dataset = (
             dataset.map(self.tokenize_func, batched=True, batch_size=self.train_config["batch_size"])
-            .filter(lambda x: 0 <= x["label"] < 3)
             .map(lambda _, idx: {'idx':idx}, with_indices=True)
-            .remove_columns(["premise", "hypothesis"])
+            .remove_columns([col for col in list(dataset.column_names.values())[0] if col not in self.batch_columns])
             .rename_column("label", "labels")
         )
         tokenized_dataset.set_format("torch")
