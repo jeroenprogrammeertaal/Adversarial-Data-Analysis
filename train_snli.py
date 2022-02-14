@@ -24,6 +24,10 @@ def prepare_model(name:str):
         model = AutoModelForSequenceClassification.from_pretrained("roberta-base", num_labels=3)
         tokenizer = AutoTokenizer.from_pretrained("roberta-base")
         return model, tokenizer
+    if name == "roberta_large":
+        model = AutoModelForSequenceClassification.from_pretrained("roberta-large", num_labels=3)
+        tokenizer = AutoTokenizer.from_pretrained("roberta-large")
+        return model, tokenizer
 
 class Trainer:
 
