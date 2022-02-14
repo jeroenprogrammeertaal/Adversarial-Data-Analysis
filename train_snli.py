@@ -237,6 +237,8 @@ if __name__ == "__main__":
                         help="Fraction of total training step to apply warmup")
     parser.add_argument("--pre_allocate_memory", action="store_true",
                         help="Whether to run dummy batches before training to pre-allocate memory.")
+    parser.add_argument("--empty_input", action="store_true",
+                        help="Whether to train on empty inputs.")
 
     # Device
     parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
@@ -245,9 +247,9 @@ if __name__ == "__main__":
     model, tokenizer = prepare_model(args["model_name"])
     dataprocessor = DataProcessor(args["dataset_name"], tokenizer, args)
     split_sizes = {
-        "train": sum([dataprocessor.get_split_n_examples(split) for split in args['train_splits']]),
-        "validation": sum([dataprocessor.get_split_n_examples(split) for split in args['validation_splits']]),
-        "test": sum([dataprocessor.get_split_n_examples(split) for split in args['test_splits']])
+        "train": dataprocessor.get_split_n_examples("train"),
+        "validation": dataprocessor.get_split_n_examples("validation"),
+        "test": dataprocessor.get_split_n_examples("test")
     }
     logger = Logger(args, split_sizes)
     trainer = Trainer(model, dataprocessor, logger, args)

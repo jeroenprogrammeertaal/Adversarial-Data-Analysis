@@ -9,7 +9,7 @@ from collections import defaultdict
 from data_utils.load_configs import LOAD_CONFIGS
 from data_utils.load_data import get_dataset
 from torch.utils.data import DataLoader
-from datasets import concatenate_datasets
+from datasets import concatenate_datasets, DatasetDict
 
 class Logger:
 
@@ -95,6 +95,8 @@ class Logger:
         path += f"batchsize={self.config['batch_size']}_betas={self.config['betas']}"
         path += f"lr={self.config['lr']}_weight_decay={self.config['weight_decay']}_"
         path += f"warmup_steps={self.config['warmup_ratio']}"
+        if self.config["empty_input"]:
+            path += "_empty_input=True"
         return path
 
     def export_cartography(self, data, split):
@@ -111,6 +113,11 @@ class DataProcessor:
         self.tokenizer = tokenizer
         self.train_config = train_config
         self.batch_columns = ["idx"] + self.tokenizer.model_input_names + ["label"]
+        self.label_names = {
+            "entailment": 0,
+            "neutral": 1,
+            "contradiction": 2
+        }
         self.dataset = self.prepare_dataset()
         self.dataloaders = self.prepare_dataloaders()
 
@@ -125,36 +132,48 @@ class DataProcessor:
             truncation="only_first"
         )
 
-    def prepare_dataset(self):
-        #TODO: tokenize with batch_size=batch_size, shuffle when loading, pad by longest in batch.
+    def prepare_dataset_splits(self, splits):
         dataset = get_dataset(self.data_config["dataset"], **self.data_config)
+        dataset = self.get_splits(dataset, splits)
         dataset = dataset.shuffle(self.train_config["seed"])
-        dataset = dataset.filter(lambda x: 0 <= x["label"] < 3)
         if "gold" in dataset.column_names:
             dataset = dataset.rename_column("gold", "label")
+            dataset = dataset.map(lambda x: {"label": self.label_names[x["label"]]})
+
+        dataset = dataset.filter(lambda x: 0 <= x["label"] < 3)
+
+        if self.train_config["empty_input"]:
+            dataset = dataset.map(lambda x: {"premise":"", "hypothesis":""})
 
         tokenized_dataset = (
             dataset.map(self.tokenize_func, batched=True, batch_size=self.train_config["batch_size"])
             .map(lambda _, idx: {'idx':idx}, with_indices=True)
-            .remove_columns([col for col in list(dataset.column_names.values())[0] if col not in self.batch_columns])
+            .remove_columns([col for col in dataset.column_names if col not in self.batch_columns])
             .rename_column("label", "labels")
         )
         tokenized_dataset.set_format("torch")
         return tokenized_dataset
 
-    def get_splits(self, splits):
+    def prepare_dataset(self):
+        return DatasetDict({
+            "train": self.prepare_dataset_splits(self.train_config["train_splits"]),
+            "validation": self.prepare_dataset_splits(self.train_config["validation_splits"]),
+            "test": self.prepare_dataset_splits(self.train_config["test_splits"])
+        })
+
+    def get_splits(self, dataset, splits):
         if splits is None:
             return
-        return concatenate_datasets([self.dataset[split] for split in splits])
+        return concatenate_datasets([dataset[split] for split in splits])
 
     def init_dataloader(self, dataset):
         return DataLoader(dataset, shuffle=False, batch_size=self.train_config["batch_size"], num_workers=4, pin_memory=True)
 
     def prepare_dataloaders(self):
         return {
-            "train": self.init_dataloader(self.get_splits(self.train_config["train_splits"])),
-            "validation": self.init_dataloader(self.get_splits(self.train_config["validation_splits"])),
-            "test": self.init_dataloader(self.get_splits(self.train_config["test_splits"]))
+            "train": self.init_dataloader(self.dataset["train"]),
+            "validation": self.init_dataloader(self.dataset["validation"]),
+            "test": self.init_dataloader(self.dataset["test"])
         }
 
     def generate_random_batch(self, sequence_length=512):
