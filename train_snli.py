@@ -147,11 +147,13 @@ class Trainer:
                 self.logger.log(step_metrics)
                 progress_bar.update(1)
 
-            validation_metrics = self.validate(validation_loader, "validation", epoch)
-            self.logger.log(validation_metrics)
+            if validation_loader:
+                validation_metrics = self.validate(validation_loader, "validation", epoch)
+                self.logger.log(validation_metrics)
 
-            test_metrics = self.validate(test_loader, "test", epoch)
-            self.logger.log(test_metrics)
+            if test_loader:
+                test_metrics = self.validate(test_loader, "test", epoch)
+                self.logger.log(test_metrics)
             
             # Gather predictions for dataset cartography
             self.validate(train_loader, "train", epoch)
@@ -247,14 +249,18 @@ if __name__ == "__main__":
     # Device
     parser.add_argument("--device", default=torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu"))
     args = vars(parser.parse_args())
-    
+        
+    args["splits"] = ["train"]
+    if args["validation_splits"] != ["none"]:
+        args["splits"].append("validation")
+    if args["test_splits"] != ["none"]:
+        args["splits"].append("test")
+   
     model, tokenizer = prepare_model(args["model_name"])
     dataprocessor = DataProcessor(args["dataset_name"], tokenizer, args)
-    split_sizes = {
-        "train": dataprocessor.get_split_n_examples("train"),
-        "validation": dataprocessor.get_split_n_examples("validation"),
-        "test": dataprocessor.get_split_n_examples("test")
-    }
+
+    split_sizes = {split: dataprocessor.get_split_n_examples(split) for split in args["splits"]}
+    
     logger = Logger(args, split_sizes)
     trainer = Trainer(model, dataprocessor, logger, args)
     trainer.train()

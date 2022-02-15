@@ -19,11 +19,11 @@ class Logger:
         self.label_probabilities = {
             "label_probs": {
                 split: torch.zeros(split_sizes[split], self.config["epochs"], device=self.config["device"], dtype=torch.float16)
-                for split in ["train", "validation", "test"]
+                for split in self.config["splits"]
             },
             "correctness": {
                 split: torch.zeros(split_sizes[split], device=self.config["device"], dtype=torch.float16)
-                for split in ["train", "validation", "test"]
+                for split in self.config["splits"]
             }
         }
     
@@ -73,7 +73,7 @@ class Logger:
         plt.close()
 
     def log_cartography(self):
-        for split in ["train", "validation", "test"]:
+        for split in self.config["splits"]:
             data = torch.stack((
                 torch.mean(self.label_probabilities["label_probs"][split], dim=-1),
                 torch.std(self.label_probabilities["label_probs"][split], dim=-1),
@@ -155,11 +155,13 @@ class DataProcessor:
         return tokenized_dataset
 
     def prepare_dataset(self):
-        return DatasetDict({
-            "train": self.prepare_dataset_splits(self.train_config["train_splits"]),
-            "validation": self.prepare_dataset_splits(self.train_config["validation_splits"]),
-            "test": self.prepare_dataset_splits(self.train_config["test_splits"])
-        })
+        data_dict = {}
+        data_dict["train"] = self.prepare_dataset_splits(self.train_config["train_splits"])
+        if "validation" in self.train_config["splits"]:
+            data_dict["validation"] = self.prepare_dataset_splits(self.train_config["validation_splits"])
+        if "test" in self.train_config["splits"]:
+            data_dict["test"] = self.prepare_dataset_splits(self.train_config["test_splits"])
+        return DatasetDict(data_dict)
 
     def get_splits(self, dataset, splits):
         if splits is None:
@@ -170,11 +172,7 @@ class DataProcessor:
         return DataLoader(dataset, shuffle=False, batch_size=self.train_config["batch_size"], num_workers=4, pin_memory=True)
 
     def prepare_dataloaders(self):
-        return {
-            "train": self.init_dataloader(self.dataset["train"]),
-            "validation": self.init_dataloader(self.dataset["validation"]),
-            "test": self.init_dataloader(self.dataset["test"])
-        }
+        return {split: self.init_dataloader(self.dataset[split]) for split in self.train_config["splits"]}  
 
     def generate_random_batch(self, sequence_length=512):
         random_batch = {}
@@ -187,7 +185,9 @@ class DataProcessor:
         return random_batch
 
     def get_dataloader(self, split:str):
-        return self.dataloaders[split]
+        if split in self.dataloaders.keys():
+            return self.dataloaders[split]
+        return None
 
     def get_split_size(self, split:str):
         return len(self.dataloaders[split])
