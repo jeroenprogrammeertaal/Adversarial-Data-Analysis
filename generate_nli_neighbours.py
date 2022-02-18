@@ -25,8 +25,8 @@ with people, even a bishop, begging for his blessing. <eod> </s> <eos>"""
 def load_model():
     #tokenizer = AutoTokenizer.from_pretrained("sshleifer/tiny-xlnet-base-cased")
     #model = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-xlnet-base-cased")
-    tokenizer = AutoTokenizer.from_pretrained("xlnet-large-cased")
-    model = AutoModelForCausalLM.from_pretrained("xlnet-large-cased")
+    tokenizer = AutoTokenizer.from_pretrained("xlnet-base-cased")
+    model = AutoModelForCausalLM.from_pretrained("xlnet-base-cased")
     return model, tokenizer
 
 def prepare_input_text(text:str):
@@ -41,6 +41,7 @@ def prepare_samples(args, tokenizer):
     of the dataset"""
     config = LOAD_CONFIGS[args["dataset_name"]]
     config["split"] = args["split"]
+    config["cache_dir"] = args["dataset_cache_dir"]
     dataset = get_dataset(config["dataset"], **config)
     dataset = dataset.shuffle(args["seed"])
     dataset = dataset.filter(lambda x: 0 <= x["label"] < 3)
@@ -70,7 +71,7 @@ def prepare_samples(args, tokenizer):
     )
     # Tokenize samples
     dataset = dataset.map(
-        lambda x: tokenizer(x["premise"] + "<sep>" + x["hypothesis"], add_special_tokens=False, return_tensors="pt")
+        lambda x: tokenizer(x["premise"] + "<sep> " + x["hypothesis"], add_special_tokens=False, return_tensors="pt")
     )
     return dataset
 
@@ -117,7 +118,8 @@ def adjust_subset_to_separation_idx(subset, separation_idx):
     subset = list(subset)
     subset[-1] = "0" #Not necessary,imo
     # NOTE: previously: subset[separation_idx-1] = "0"
-    subset[separation_idx] = "0"
+    #subset[separation_idx] = "0"
+    subset[separation_idx - 1] = "0"
     if "1" not in subset:
         return
     return "".join(subset)
@@ -129,7 +131,7 @@ def adjust_subset(subset, token_string, separation_idx):
 def generate_example_subsets(example, tokenizer):
     input_ids = example["input_ids"][0]
     sep_idx = [i for i, x in enumerate(input_ids) if x == 4][0]
-    #del input_ids[sep_idx]
+    del input_ids[sep_idx]
     
     sequence_length = len(input_ids)
     mask_id = tokenizer.convert_tokens_to_ids("<mask>")
@@ -141,7 +143,7 @@ def generate_example_subsets(example, tokenizer):
         subsets.update(generate_n_gram_subset_masks(n, sequence_length, token_strings, sep_idx))
 
     subsets.update(generate_span_subset_masks(sequence_length, token_strings, sep_idx))
-    return subsets
+    return subsets, sep_idx
 
 class ExampleSubsetsDataset:
 
@@ -170,7 +172,8 @@ class ExampleSubsetsDataset:
 
     def construct_permutation_mask(self, subsets_ids):
         permutation_mask = torch.zeros((subsets_ids.size(0), subsets_ids.size(1), subsets_ids.size(1)), dtype=torch.float, device=subsets_ids.device)
-        permutation_mask[:, :, self.pad_length:][subsets_ids==6] = 1.0
+        mask_idx = torch.nonzero((subsets_ids == 6).int())
+        permutation_mask[mask_idx[:,0], :, mask_idx[:,1]] = 1.0
         return permutation_mask
 
     def construct_target_mapping(self, subsets_ids, n_targets):
@@ -188,16 +191,18 @@ class ExampleSubsetsDataset:
 
     def store_item(self, idx):
         example = self.examples[idx]
-        subsets = generate_example_subsets(example, tokenizer)
+        subsets, sep_idx = generate_example_subsets(example, tokenizer)
 
         original_input_ids = torch.LongTensor(example["input_ids"][0])
         original_input_ids = torch.cat((self.pad_ids.clone(), original_input_ids), dim=0)
         example_idx = torch.Tensor([example["idx"]]).long()
+        sep_idx = torch.Tensor([sep_idx]).long()
         for subset in subsets:
             if subset is not None:
                 n_masks = subset.count("1")
+                subset_mask = [int(x) for x in subset]
                 encoding = self.encode_subset(original_input_ids, subset)
-                self.data_ques[n_masks].append((encoding, example_idx))
+                self.data_ques[n_masks].append((encoding, example_idx, subset_mask, sep_idx))
 
 
 def to_device(batch, device):
@@ -214,19 +219,21 @@ def pad_batch(input_ids):
 
 def batch_generator(dataset, batch_size):
     for n_targets in dataset.data_ques.keys():
-        input_ids, example_ids = [], []
+        input_ids, example_ids, subset_masks, sep_idc = [], [], [], []
         while len(dataset.data_ques[n_targets]) > 0:
-            sequence_ids, ex_id = dataset.data_ques[n_targets].pop()
+            sequence_ids, ex_id, subset_mask, sep_idx = dataset.data_ques[n_targets].pop()
             input_ids.append(sequence_ids)
             example_ids.append(ex_id)
+            subset_masks.append(subset_mask)
+            sep_idc.append(sep_idx)
             if len(input_ids) == batch_size or len(dataset.data_ques[n_targets]) == 0:
                 input_ids, attn_mask = pad_batch(input_ids)
-                yield (input_ids, attn_mask, example_ids)
-                input_ids, example_ids = [], []
+                yield (input_ids, attn_mask, example_ids, subset_masks, sep_idc)
+                input_ids, example_ids, subset_masks, sep_idc = [], [], [], []
 
 def generate_token(model, batch, vocab_mask, device):
     # Construct inputs
-    input_ids, attn_mask, _ = batch
+    input_ids, attn_mask = batch
     permutation_mask = dataset.construct_permutation_mask(input_ids)
     target_mask = dataset.construct_single_target_mapping(input_ids)
     input_ids, attn_mask, permutation_mask, target_mask = to_device([input_ids, attn_mask, permutation_mask, target_mask], device)
@@ -247,10 +254,10 @@ def generate_token(model, batch, vocab_mask, device):
 
     return input_ids
 
-def tokens_to_str(tokens, tokenizer, pad_length):
+def tokens_to_str(tokens, tokenizer):
     strings = []
     for sequence in tokens:
-        strings.append(tokenizer.decode(sequence[pad_length:], skip_special_tokens=False))
+        strings.append(tokenizer.decode(sequence, skip_special_tokens=False))
     return strings
 
 @torch.no_grad()
@@ -263,24 +270,29 @@ def generate_neighbours(model, dataset, args):
     data_generator = batch_generator(dataset, 64)
     for batch in data_generator:
         for _ in range(args["n_neighbour_samples"]):
-            input_ids, attn_mask, example_ids = batch
+            input_ids, attn_mask, example_ids, subset_masks, sep_idc = batch
             n_remaining_targets = torch.sum((input_ids[0] == 6).int())
             n_targets = n_remaining_targets.item()
 
             while n_remaining_targets > 0:
-                input_ids = generate_token(model, (input_ids, attn_mask, example_ids), vocab_mask, args["device"])
+                input_ids = generate_token(model, (input_ids, attn_mask), vocab_mask, args["device"])
                 n_remaining_targets = torch.sum((input_ids[0] == 6).int())
 
-            decoded = tokens_to_str(input_ids, dataset.tokenizer, dataset.pad_length)
+            for i in range(input_ids.size(0)):
+                sep_idx = sep_idc[i].item() + dataset.pad_length
+                decoded = tokens_to_str([input_ids[i, dataset.pad_length:sep_idx], input_ids[i, sep_idx:]], dataset.tokenizer)
+                results.append((decoded[0], decoded[1], n_targets, example_ids[i].item(), subset_masks[i])) 
 
-            for i, neighbour in enumerate(decoded):
-                premise, hypothesis = neighbour.replace("<pad>", "").split("<sep>")
-                results.append((premise, hypothesis, n_targets, example_ids[i].item()))
+#            decoded = tokens_to_str(input_ids, dataset.tokenizer, dataset.pad_length)
+
+#            for i, neighbour in enumerate(decoded):
+#                premise, hypothesis = neighbour.replace("<pad>", "").split("<sep>")
+#                results.append((premise, hypothesis, n_targets, example_ids[i].item(), subset_masks[i]))
 
         
     with open(args["save_dir"] + f"/{args['dataset_name']}/_n_samples={args['n_samples']}_split={args['split']}_seed={args['seed']}.txt", "w") as f:
         for line in results:
-            f.write(f"{line[0]}, {line[1]}, {line[2]}, {line[3]}\n")
+            f.write(f"{line[0]} \t {line[1]} \t {line[2]} \t {line[3]} \t {line[4]}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Estimate Sensitivity")
@@ -304,6 +316,7 @@ if __name__ == "__main__":
     samples = prepare_samples(args, tokenizer)
     dataset = ExampleSubsetsDataset(samples, tokenizer)
     
-    for i in range(len(dataset)):
+    #for i in range(len(dataset)):
+    for i in range(1):
         dataset.store_item(i)
     generate_neighbours(model, dataset, args)
