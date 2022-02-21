@@ -31,7 +31,7 @@ class Logger:
         self.init_wandb()
 
     def init_wandb(self):
-        os.environ["WANDB_API_KEY"] = "ed4069226e12b4cb593edbdc9945e968caeb2a66"
+        os.environ["WANDB_API_KEY"] = ""
     
         wandb.init(
             project="adversarial_NLU",
