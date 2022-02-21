@@ -9,6 +9,7 @@ from collections import defaultdict
 from data_utils.load_configs import LOAD_CONFIGS
 from data_utils.load_data import get_dataset
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from datasets import concatenate_datasets, DatasetDict
 
 class Logger:
@@ -30,11 +31,11 @@ class Logger:
         self.init_wandb()
 
     def init_wandb(self):
-        os.environ["WANDB_API_KEY"] = ""
-
+        os.environ["WANDB_API_KEY"] = "ed4069226e12b4cb593edbdc9945e968caeb2a66"
+    
         wandb.init(
             project="adversarial_NLU",
-            group=self.config["dataset_name"],
+            group=f"{self.config['model_name']}_{self.config['dataset_name']}",
             tags=[self.config["model_name"]],
             config=self.config
         )
@@ -100,7 +101,7 @@ class Logger:
         return path
 
     def export_cartography(self, data, split):
-        path = self.get_save_affix() + f"_{split}_cartography.pt"
+        path = self.get_save_affix() + f"_{split}_cartography_rank={self.config['rank']}.pt"
         torch.save(data, path)
     
 
@@ -171,8 +172,31 @@ class DataProcessor:
     def init_dataloader(self, dataset):
         return DataLoader(dataset, shuffle=False, batch_size=self.train_config["batch_size"], num_workers=4, pin_memory=True)
 
+    def init_ddp_dataloader(self, dataset):
+        sampler = DistributedSampler(
+            dataset, 
+            shuffle=False, 
+            num_replicas=self.train_config["world_size"],
+            rank=self.train_config["rank"]
+        )
+        return DataLoader(
+            dataset=dataset,
+            sampler=sampler,
+            batch_size=self.train_config["batch_size"],
+            num_workers=4,
+            pin_memory=True
+        )
+
     def prepare_dataloaders(self):
-        return {split: self.init_dataloader(self.dataset[split]) for split in self.train_config["splits"]}  
+        if not "gpus" in self.train_config.keys():
+            return {
+                split: self.init_dataloader(self.dataset[split]) 
+                for split in self.train_config["splits"]
+            }
+        return {
+            split: self.init_ddp_dataloader(self.dataset[split])
+            for split in self.train_config["splits"]
+        }
 
     def generate_random_batch(self, sequence_length=512):
         random_batch = {}
