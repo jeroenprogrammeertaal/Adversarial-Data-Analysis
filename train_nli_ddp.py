@@ -41,13 +41,14 @@ class Trainer:
     ):
         
         self.model = model.to(config["device"])
-        self.model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config["gpu"]])
+        #self.model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config["gpu"]])
         self.data_processor = dataprocessor
         self.logger = logger
         self.config = config
         self.optimizer = self.init_optimizer()
         self.grad_scaler = GradScaler()
         self.lr_scheduler = self.init_lr_scheduler()
+        self.model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config["gpu"]])
         self.device = config["device"]
 
     def set_seed(self, seed):
@@ -130,11 +131,13 @@ class Trainer:
         self.grad_scaler.scale(loss).backward()
         self.grad_scaler.step(self.optimizer)
         self.lr_scheduler.step()
+        scale = self.grad_scaler.get_scale()
         self.grad_scaler.update()
         return {
             "train/loss": loss.detach().item(), 
             "train/accuracy": accuracy,
-            "train/learning_rate": self.get_lr()
+            "train/learning_rate": self.get_lr(),
+            "train/grad_scale": scale
         }
 
     def train(self):
