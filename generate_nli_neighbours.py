@@ -1,12 +1,13 @@
 """Code slightly adjusted from: https://github.com/m-hahn/sensitivity/blob/main/code/xlnet/GLUE/MNLI/generate18_c.py
 """
-import os
+import os, time
 import argparse
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import torch.multiprocessing as mp
 import torch.distributed as dist
+from torch.cuda.amp import autocast
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from construct_subset_dataset import get_batches
@@ -25,8 +26,8 @@ with people, even a bishop, begging for his blessing. <eod> </s> <eos>"""
 def load_model():
     #tokenizer = AutoTokenizer.from_pretrained("sshleifer/tiny-xlnet-base-cased")
     #model = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-xlnet-base-cased")
-    tokenizer = AutoTokenizer.from_pretrained("xlnet-base-cased")
-    model = AutoModelForCausalLM.from_pretrained("xlnet-base-cased")
+    tokenizer = AutoTokenizer.from_pretrained("xlnet-large-cased")
+    model = AutoModelForCausalLM.from_pretrained("xlnet-large-cased")
     return model, tokenizer
 
 
@@ -58,9 +59,8 @@ def set_seed(seed):
 def get_dataloader(tokenizer, rank, args):
     batches = get_batches(tokenizer, args)
     part_size = len(batches) // args["world_size"]
-    part_rank = int(part_size * rank)
-    start = int(part_rank * part_size)
-    end = int((part_rank + 1) * part_size)
+    start = int(part_size * rank)
+    end = int((rank + 1) * part_size)
     if end > len(batches):
         end = len(batches)
     return batches[start : end]
@@ -77,14 +77,15 @@ def generate_token(model, batch, vocab_mask, gpu):
     input_ids, attn_mask, permutation_mask, target_mask = to_device([input_ids, attn_mask, permutation_mask, target_mask], gpu)
     
     # Generate new tokens
-    outputs = model(
-        input_ids,
-        attention_mask=attn_mask,
-        perm_mask=permutation_mask,
-        target_mapping=target_mask
-    )
-    probs = F.softmax(outputs.logits + vocab_mask, dim=-1).squeeze(1)
-    next_tokens = torch.multinomial(probs, num_samples=1)
+    with autocast():
+        outputs = model(
+            input_ids,
+            attention_mask=attn_mask,
+            perm_mask=permutation_mask,
+            target_mapping=target_mask
+        )
+        probs = F.softmax(outputs.logits + vocab_mask, dim=-1).squeeze(1)
+        next_tokens = torch.multinomial(probs, num_samples=1)
 
     # Insert generated tokens
     target_idx = get_first_mask_idx(input_ids)
@@ -123,6 +124,8 @@ def generate_neighbours(gpu, args):
     data_loader = get_dataloader(tokenizer, rank, args)
     for batch in data_loader:
         for _ in range(args["n_neighbour_samples"]):
+            batch_start = time.time()
+            
             input_ids, attn_mask, example_ids, subset_masks, sep_idc = batch
             n_remaining_targets = torch.sum((input_ids[0] == 6).int())
             n_targets = n_remaining_targets.item()
@@ -130,11 +133,17 @@ def generate_neighbours(gpu, args):
             while n_remaining_targets > 0:
                 input_ids = generate_token(model, (input_ids, attn_mask), vocab_mask, gpu)
                 n_remaining_targets = torch.sum((input_ids[0] == 6).int())
-
+            
+            batch_end = time.time()
+            #print(f"Processing batch with {n_targets} targets took {batch_end - batch_start}")
+            
+            decode_start = time.time()
             for i in range(input_ids.size(0)):
                 sep_idx = sep_idc[i].item() + pad_length
                 decoded = tokens_to_str([input_ids[i, pad_length:sep_idx], input_ids[i, sep_idx:]], tokenizer)
                 results.append((decoded[0], decoded[1], n_targets, example_ids[i].item(), subset_masks[i]))
+            decode_end = time.time()
+            #print(f"Decoding batch with {n_targets} targets took {decode_end - decode_start}")
     
         with open(args["save_dir"] + f"/{args['dataset_name']}/_n_samples={args['n_samples']}_split={args['split']}_seed={args['seed']}_rank={rank}.txt", "ab") as f:
             for line in results:
@@ -166,6 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("--node_rank", type=int, default=0,
                     help="Ranking of node to use.")
     args = vars(parser.parse_args())
+  
     os.environ['CUDA_VISIBLE_DEVICES'] = ",".join([str(x) for x in range(args["gpus"])])
     args["dist_url"] = f"tcp://localhost:8888"
     args["world_size"] = args["gpus"] * args["nodes"]
