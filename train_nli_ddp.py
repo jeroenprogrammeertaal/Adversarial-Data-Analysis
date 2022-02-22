@@ -123,7 +123,7 @@ class Trainer:
         
         with autocast():
             outputs = self.model(**batch)
-        
+
         loss = outputs.loss
         logits = outputs.logits.detach()
         accuracy = self.get_accuracy(logits, batch["labels"].detach())
@@ -141,6 +141,7 @@ class Trainer:
         }
 
     def train(self):
+        wandb.watch(self.model, log="all", log_freq=10)
         train_loader = self.data_processor.get_dataloader("train")
         validation_loader = self.data_processor.get_dataloader("validation")
         test_loader = self.data_processor.get_dataloader("test")
@@ -177,7 +178,7 @@ class Trainer:
         
         with autocast():
             outputs = self.model(**batch)
-        
+
         loss = outputs.loss
         logits = outputs.logits.detach()
         
@@ -214,13 +215,13 @@ class Trainer:
         if self.config["main"]:
             self.model = self.model.to(torch.device("cpu"))
             path = self.logger.get_save_affix() + ".pt"
-            torch.save(self.model.state_dict(), path)
+            torch.save(self.model.module.state_dict(), path)
 
 def train(gpu, args):
     args['gpu'] = gpu # local rank
     args['rank'] = args["node_rank"] * args["gpus"] + gpu # global rank
 
-    dist.init_process_group(backend='nccl', init_method=args['dist_url'], world_size=args["world_size"], rank=args["rank"])
+    dist.init_process_group(backend='nccl', init_method="env://", world_size=args["world_size"], rank=args["rank"])
 
     torch.manual_seed(args["seed"])
     torch.cuda.manual_seed_all(args["seed"])
@@ -290,6 +291,8 @@ if __name__ == "__main__":
     args["world_size"] = args["gpus"] * args["nodes"]
     args["dist_url"] = f"tcp://localhost:8888"
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join([str(x) for x in range(args["gpus"])])
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = '12355'
     print(f"Found {torch.cuda.device_count()} gpus...")
         
     args["splits"] = ["train"]
@@ -299,3 +302,4 @@ if __name__ == "__main__":
         args["splits"].append("test")
    
     mp.spawn(train, args=(args,), nprocs=args['gpus'])
+    model, tokenizer = prepare_model("tiny_bert")
