@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import random
 import pickle
+import nltk
 
 from typing import List, Union
 from collections import defaultdict
@@ -258,7 +259,7 @@ class NliAnalyzer:
             [column_1, column_2], 
             get_example_cosine_sim, 
             batched=batched,
-            affix=f"{column_1}_{column_2}_cosine_sim_small_lm",
+            affix=f"{column_1}_{column_2}_cosine_sim",
             model=model)
 
     def get_hans_heuristics(self, column_1, column_2, model, batched=True):
@@ -273,15 +274,49 @@ class NliAnalyzer:
         )
 
 
+    def get_sequence_length_stats(self, columns, splits):
+        split_data = []
+        for split in splits:
+            split_data.append(self.processor.get_split_data(split, self.correctness))
+        split_data = concatenate_datasets(split_data)
+
+        if self.subsample_size > 0:
+            split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
+
+        for column in columns:
+            length_column = column + f"_tokens_{self.tokenizer_name}_length"
+
+            avg = np.mean(split_data[length_column])
+            std = np.std(split_data[length_column])
+
+            print(f"column: {column}, avg: {avg}, std: {std}")
+
+    def get_attribute_stats(self, column_1, column_2, splits, attr_column):
+        split_data = []
+        for split in splits:
+            split_data.append(self.processor.get_split_data(split, self.correctness))
+        split_data = concatenate_datasets(split_data)
+
+        if self.subsample_size > 0:
+            split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
+
+        #attribute_column = f"_tokens_{self.tokenizer_name}_{column_1}_{column_2}_overlap"
+
+        avg = np.mean(split_data[attr_column])
+        std = np.std(split_data[attr_column])
+
+        print(f"avg: {avg}, std: {std}")
+
     def plot_sequence_lengths(self, columns, splits):
         for column in columns:
             length_column = column + f"_tokens_{self.tokenizer_name}_length"
             plt.figure(figsize=(12, 10))
+            texts = []
             for class_ in self.class_names.keys():
                 split_data =[]
                 for split in splits:
                     split_data.append(self.processor.get_split_data(split, self.correctness))
-                print(split_data)
+                #print(split_data)
                 
                 split_data = concatenate_datasets(split_data)
                 if self.subsample_size > 0:
@@ -289,14 +324,19 @@ class NliAnalyzer:
 
                 class_data = split_data.filter(lambda x: x["label"] == class_)
                 
+                avg = np.mean(class_data[length_column])
+                std = np.std(class_data[length_column])
                 density = kde.gaussian_kde(class_data[length_column])
                 x = list(range(40))
                 y = density(x)
                 plt.plot(x, y, label=self.class_names[class_])
+                plt.axvline(avg)
+                texts.append(plt.text(avg + 0.5, 0.01, f"{round(avg, 2)}/{round(std, 3)}"))
 
             plt.xticks(x, fontsize=8)
             plt.xlabel("length")
             plt.ylabel("density")
+            adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red'))
             plt.legend()
             affix = f"/_{splits}_{column}" + self.get_save_affix()
             plt.savefig(self.save_dir + affix+".png")
@@ -304,6 +344,7 @@ class NliAnalyzer:
 
     def plot_attribute_density_per_class(self, splits, column_1, column_2, x_max, attribute_name, attribute_column):
         plt.figure(figsize=(12, 10))
+        texts = []
         for class_ in self.class_names.keys():
             split_data = []
             for split in splits:
@@ -313,20 +354,26 @@ class NliAnalyzer:
                 split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
                 
             class_data = split_data.filter(lambda x: x["label"] == class_)
+            avg = np.mean(class_data[attribute_column])
+            std = np.std(class_data[attribute_column])
             density = kde.gaussian_kde(class_data[attribute_column])
             x = np.linspace(0, 1, 100)
             y = density(x)
             plt.plot(x, y, label=self.class_names[class_])
+            plt.axvline(avg)
+            texts.append(plt.text(avg+0.01, 0.01, f"{round(avg, 2)}/{round(std, 3)}"))
         
         plt.xlabel(f"{column_1} - {column_2} {attribute_name}")
         plt.ylabel("density")
+        adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red'))
         plt.legend()
         affix = f"/_{splits}_{column_1}_{column_2}_{attribute_name}" + self.get_save_affix()
         plt.savefig(self.save_dir + affix+".png")
         plt.close()
 
     def get_unique_n_grams(self, splits, columns, n):
-        unique_grams = {col: set() for col in columns}
+        #unique_grams = {col: {class_: set() for class_ in self.class_names.keys()} for col in columns}
+        unique_grams = set()
         for column in columns:
             if n == 1:
                 gram_column = column + f"_tokens_{self.tokenizer_name}"
@@ -339,14 +386,15 @@ class NliAnalyzer:
             split_data = concatenate_datasets(split_data)
             if self.subsample_size > 0:
                 split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
-                
-            unique_grams[column].update(
+            #class_data = split_data.filter(lambda x: x["label"] == class_)
+            unique_grams.update(
                 set(
                     tuple(n_gram) for example in split_data[gram_column]
                     for n_gram in example
                 )
             )
-        return {column: len(unique_grams[column]) for column in columns}
+        return len(unique_grams) / len(split_data[gram_column])
+        #return {column: {class_: len(unique_grams[column][class_]) for class_ in self.class_names.keys()} for column in columns}
 
     def get_group_similarities(self, group_df, sim_col, model):
         # returns the average max similarity per group
@@ -362,9 +410,49 @@ class NliAnalyzer:
                 similarities.append(mean_sims.item())
         return similarities
 
+    def get_group_BLEU_similarities(self, group_df, sim_col_tokens, sim_col):
+        similarities = []
+        for name, group in group_df:
+            if len(group[sim_col]) > 1:
+                references = [list(x) for x in group[sim_col_tokens].values]
+                scores = torch.zeros((len(references), len(references)))
+                for i in range(len(references)):
+                    for j in range(len(references)):
+                        if i != j:
+                            scores[i][j] = nltk.translate.bleu_score.sentence_bleu([references[i]], references[j])
+                scores.fill_diagonal_(0)
+                max_sims = torch.max(scores)
+                mean_sims = torch.mean(max_sims)
+                similarities.append(mean_sims.item())
+        return similarities
+
+    def get_interBLEU(self, group_col, sim_col, splits):
+        token_affix = f"_tokens_{self.tokenizer_name}"
+        self.processor.apply_operation([sim_col], self.tokenizer, batched=True, affix=token_affix)
+
+        split_data = []
+        for split in splits:
+            split_data.append(self.processor.get_split_data(split, self.correctness))
+        split_data = concatenate_datasets(split_data)
+        
+        if self.subsample_size > 0:
+            split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
+
+        split_data.set_format("pandas")
+        print(len(split_data[group_col].unique()))
+        sim_col_tokens = sim_col + f"_tokens_{self.tokenizer_name}"
+        similarities = self.get_group_BLEU_similarities(split_data[:].groupby(group_col), sim_col_tokens, sim_col)
+
+        avg = np.mean(similarities)
+        std = np.std(similarities)
+        print(f"avg: {avg}, std: {std}")
+
+
+
     def plot_interexample_similarity(self, group_col, sim_col, splits, model):
         class_sims = {l:[] for l in self.class_names.keys()}
         plt.figure(figsize=(12, 10))
+        texts = []
         for class_ in self.class_names.keys():
             split_data = []
             for split in splits:
@@ -379,14 +467,19 @@ class NliAnalyzer:
             class_data.set_format("pandas")
             similarities = self.get_group_similarities(class_data[:].groupby(group_col), sim_col, model)
             density = kde.gaussian_kde(similarities)
+            avg = np.mean(similarities)
+            std = np.std(similarities)
             x = np.linspace(0, 1, 100)
             y = density(x)
             plt.plot(x, y, label=self.class_names[class_])
+            plt.axvline(avg)
+            texts.append(plt.text(avg + 0.01, 0.01, f"{round(avg, 2)}/{round(std, 3)}"))
             
         plt.xlabel(f"Cosine Similarity")
         plt.ylabel(f"density")
         plt.legend()
         affix = f"/_{splits}_{group_col}_{sim_col}_interexampe_similarity" + self.get_save_affix()
+        adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red'))
         plt.savefig(self.save_dir + affix + ".png")
         plt.close()
 
@@ -419,7 +512,16 @@ class NliAnalyzer:
                     positives[2] += 1
                 else:
                     negatives[2] += 1
-        
+        texts = []
+        for i in range(len(positives)):
+            total = positives[i] + negatives[i]
+            try:
+                perc_neg = negatives[i] / total
+            except:
+                perc_neg = 0
+            print(total, perc_neg)
+            plt.annotate(f"{total}/{perc_neg}", (i, total + 2))
+
         plt.figure(figsize=(12, 10))
         plt.xticks(rotation=45)
         plt.bar(labels, positives, width=0.35, label="positive")
@@ -427,6 +529,7 @@ class NliAnalyzer:
         plt.ylabel("Number of examples")
         plt.xlabel("Heuristic type")
         plt.legend()
+        #adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red'))
         affix = f"/_{splits}_hans_heuristics" + self.get_save_affix()
         plt.savefig(self.save_dir + affix + ".png")
         plt.close()
@@ -517,7 +620,7 @@ class NliAnalyzer:
         label_0 = np.argwhere(artefacts[:,0] == 0)[:,0]
         label_1 = np.argwhere(artefacts[:,0] == 1)[:,0]
         label_2 = np.argwhere(artefacts[:,0] == 2)[:,0]
-        
+        print(len(label_0), len(label_1), len(label_2)) 
         plt.scatter(artefacts[:,2][label_0], 
                     artefacts[:,1][label_0], 
                     label=self.class_names[0], 
