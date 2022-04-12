@@ -83,11 +83,7 @@ def plot_pvi(pvi, split):
 
 def v_info_experiment(g, g_prime, dataprocessor, args):
     
-    split_sizes = {
-        "train": sum([dataprocessor.get_split_n_examples(split) for split in args['train_splits']]),
-        "validation": sum([dataprocessor.get_split_n_examples(split) for split in args['validation_splits']]),
-        "test": sum([dataprocessor.get_split_n_examples(split) for split in args['test_splits']])
-    }
+    split_sizes = {split: dataprocessor.get_split_n_examples(split) for split in args['splits']}
 
     for split in ["train", "validation", "test"]:
         loader = dataprocessor.get_dataloader(split)
