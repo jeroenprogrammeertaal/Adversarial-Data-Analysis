@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 from torch.cuda.amp import GradScaler, autocast
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, AdamW
 from transformers import get_constant_schedule, get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup
-
+from filter_modules import BertEncoder
 
 def prepare_model(name:str):
     """returns model + tokenizer"""
@@ -27,6 +27,11 @@ def prepare_model(name:str):
     if name == "roberta_large":
         model = AutoModelForSequenceClassification.from_pretrained("roberta-large", num_labels=3)
         tokenizer = AutoTokenizer.from_pretrained("roberta-large")
+        return model, tokenizer
+    if name == "filter_bert":
+        model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=3)
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        model.bert.encoder = BertEncoder(model.config)
         return model, tokenizer
 
 class Trainer:
@@ -255,6 +260,8 @@ if __name__ == "__main__":
         args["splits"].append("validation")
     if args["test_splits"] != ["none"]:
         args["splits"].append("test")
+
+    args["rank"] = 0
    
     model, tokenizer = prepare_model(args["model_name"])
     dataprocessor = DataProcessor(args["dataset_name"], tokenizer, args)
