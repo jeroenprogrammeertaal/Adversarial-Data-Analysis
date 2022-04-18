@@ -2,6 +2,7 @@ import os
 import re
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+import pyplot_themes as themes
 import csv
 import numpy as np
 import torch
@@ -10,7 +11,7 @@ import pickle
 import nltk
 
 from typing import List, Union
-from collections import defaultdict
+from collections import defaultdict, deque
 from data_utils.process_data import DataProcessor
 from data_utils.load_configs import LOAD_CONFIGS
 from scipy.stats import kde
@@ -113,6 +114,75 @@ def get_example_cosine_sim(examples, columns, **kwargs):
         kwargs["affix"] : results
     }
 
+def get_example_yngve(examples, columns, **kwargs):
+    
+    def avg_yngve_score(doc):
+        score = 0
+        for sent in doc.sents:
+            root_distance = {}
+            stack = deque()
+
+            root = list(sent._.constituents)[0]
+            stack.append(root)
+
+            while len(stack) > 0:
+                constituent = stack.pop()
+                if len(list(constituent._.children)) == 0:
+                    root_distance[constituent] = len(stack)
+
+                for child in list(constituent._.children)[::-1]:
+                    if str(child) not in [".", ",", ";", "!", "?", "'", "`"]:
+                        stack.append(child)
+
+            score += np.mean(list(root_distance.values()))
+        return score / len(list(doc.sents))
+
+    def parse_texts(texts, model):
+        if type(texts) == str:
+            texts = [texts]
+
+        return model.pipe(texts)
+
+    if not kwargs["batched"]:
+        return {
+            col + "_yngve": avg_yngve_score(parse_texts(examples[col], kwargs["model"]))
+            for col in columns
+        }
+    return {
+        col + "_yngve": [avg_yngve_score(x) for x in parse_texts(examples[col], kwargs["model"])]
+        for col in columns
+    }
+
+def get_parse_tree_height(examples, columns, **kwargs):
+
+    def get_height(doc):
+        
+        def walk_tree(node, depth):
+            if len(list(node._.children)) > 0:
+                return max([walk_tree(child, depth + 1) for child in node._.children])
+            return depth
+
+        score = 0
+        for sent in doc.sents:
+            root = list(sent._.constituents)[0]
+            score += walk_tree(root, 0)
+        return score / len(list(doc.sents))
+
+    def parse_texts(texts, model):
+        if type(texts) == str:
+            texts = [texts]
+        return model.pipe(texts)
+    
+    if not kwargs["batched"]:
+        return {
+            col + "_parse_height": get_height(parse_texts(examples[col], kwargs["model"]))
+            for col in columns
+        }
+    return {
+        col + "_parse_height": [get_height(x) for x in parse_texts(examples[col], kwargs["model"])]
+        for col in columns
+    }
+
 
 def get_example_hans_heuristics(examples, columns, **kwargs):
     # Columns[0]: Premise tokens
@@ -185,7 +255,6 @@ def get_example_hans_heuristics(examples, columns, **kwargs):
         "subsequence_heuristic": results_subsequence,
         "constituence_heuristic": results_const
     }
-
 
 
 class NliAnalyzer:
@@ -272,6 +341,12 @@ class NliAnalyzer:
             batched=batched,
             model=model
         )
+
+    def get_yngve_scores(self, columns, model, batched=True):
+        self.processor.apply_operation(columns, get_example_yngve, model=model, batched=batched)
+
+    def get_parse_tree_heights(self, columns, model, batched=True):
+        self.processor.apply_operation(columns, get_parse_tree_height, model=model, batched=batched)
 
 
     def get_sequence_length_stats(self, columns, splits):
@@ -371,29 +446,32 @@ class NliAnalyzer:
         plt.savefig(self.save_dir + affix+".png")
         plt.close()
 
-    def get_unique_n_grams(self, splits, columns, n):
+    def get_unique_n_grams(self, splits, columns, n, seed=42):
         #unique_grams = {col: {class_: set() for class_ in self.class_names.keys()} for col in columns}
-        unique_grams = set()
+        split_data = []
+            
+        for split in splits:
+            split_data.append(self.processor.get_split_data(split, self.correctness))
+        split_data = concatenate_datasets(split_data)
+        if self.subsample_size > 0:
+            print("subsampling data")
+            split_data = split_data.shuffle(seed=seed)
+            split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
+        #class_data = split_data.filter(lambda x: x["label"] == class_)
+        unique_grams = set()        
         for column in columns:
             if n == 1:
                 gram_column = column + f"_tokens_{self.tokenizer_name}"
             else:
                 gram_column = column + f"_tokens_{self.tokenizer_name}_{n}_gram"
-            split_data = []
-            
-            for split in splits:
-                split_data.append(self.processor.get_split_data(split, self.correctness))
-            split_data = concatenate_datasets(split_data)
-            if self.subsample_size > 0:
-                split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
-            #class_data = split_data.filter(lambda x: x["label"] == class_)
             unique_grams.update(
                 set(
                     tuple(n_gram) for example in split_data[gram_column]
                     for n_gram in example
                 )
             )
-        return len(unique_grams) / len(split_data[gram_column])
+        return len(unique_grams)
+        #return len(unique_grams) / len(split_data[gram_column])
         #return {column: {class_: len(unique_grams[column][class_]) for class_ in self.class_names.keys()} for column in columns}
 
     def get_group_similarities(self, group_df, sim_col, model):
@@ -438,15 +516,37 @@ class NliAnalyzer:
         if self.subsample_size > 0:
             split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
 
-        split_data.set_format("pandas")
-        print(len(split_data[group_col].unique()))
-        sim_col_tokens = sim_col + f"_tokens_{self.tokenizer_name}"
-        similarities = self.get_group_BLEU_similarities(split_data[:].groupby(group_col), sim_col_tokens, sim_col)
+        similarities = []
+        for class_ in self.class_names.keys():
+            class_data = split_data.filter(lambda x: x["label"] == class_)
+            
+            class_data.set_format("pandas")
+            #print(len(split_data[group_col].unique()))
+            sim_col_tokens = sim_col + f"_tokens_{self.tokenizer_name}"
+            similarities.extend(self.get_group_BLEU_similarities(class_data[:].groupby(group_col), sim_col_tokens, sim_col))
 
-        avg = np.mean(similarities)
-        std = np.std(similarities)
-        print(f"avg: {avg}, std: {std}")
+        #avg = np.mean(similarities)
+        #std = np.std(similarities)
+        #print(f"avg: {avg}, std: {std}")
 
+        return similarities
+
+    def get_intercosine(self, group_col, sim_col, splits, model):
+        split_data = []
+        for split in splits:
+            split_data.append(self.processor.get_split_data(split, self.correctness))
+        split_data = concatenate_datasets(split_data)
+        
+        if self.subsample_size > 0:
+            split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
+        
+        similarities = []
+        for class_ in self.class_names.keys():
+            class_data = split_data.filter(lambda x: x["label"] == class_)
+
+            class_data.set_format("pandas")
+            similarities.extend(self.get_group_similarities(class_data[:].groupby(group_col), sim_col, model))
+        return similarities
 
 
     def plot_interexample_similarity(self, group_col, sim_col, splits, model):
@@ -543,10 +643,13 @@ class NliAnalyzer:
         for column in columns:
             token_column = column + token_affix
 
-            split_data = []
-            for split in splits:
-                split_data.append(self.processor.get_split_data(split, self.correctness))
-            split_data = concatenate_datasets(split_data)    
+            if len(splits) > 0:
+                split_data = []
+                for split in splits:
+                    split_data.append(self.processor.get_split_data(split, self.correctness))
+                split_data = concatenate_datasets(split_data)
+            else:
+                split_data = self.processor.dataset
             
             if self.subsample_size > 0:
                 split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
@@ -555,8 +658,31 @@ class NliAnalyzer:
                 for token in example[token_column]:
                     if example["label"] >= 0:
                         counts[token][example["label"]] += 1
-
         return counts
+
+    def get_gram_label_counts(self, n, columns, splits, batched=True):
+        token_affix = f"_tokens_{self.tokenizer_name}"
+        if n > 1:
+            token_affix += f"_{n}_gram"
+        self.get_n_grams(columns, n, batched=batched)
+        
+        counts = defaultdict(lambda: defaultdict(int))
+        token_columns = [col + token_affix for col in columns]
+        split_data = []
+        for split in splits:
+            split_data.append(self.processor.get_split_data(split, self.correctness))
+        split_data = concatenate_datasets(split_data)
+
+        if self.subsample_size > 0:
+            split_data = self.processor.subsample_split_classes(split_data, self.subsample_size)
+
+        for example in tqdm(split_data):
+            tokens = [x for y in [example[column] for column in token_columns] for x in y]
+            for token in tokens:
+                if example["label"] >= 0:
+                    counts[" ".join(token)][example["label"]] += 1
+        return counts
+
 
     def get_z_statistics(self, counts):
         # Hypothesis probability
@@ -590,6 +716,33 @@ class NliAnalyzer:
         curve = (significance_level * 2**0.5) / (3 * n**0.5) + p_0
         return curve
 
+    
+    def plot_z_statistics(self, columns, splits):
+        themes.theme_few(grid=False, fontsize=14)
+        n = [1, 2, 3, 4, 5, 6]
+        
+        fig, axs = plt.subplots(2, 3, sharey=True)
+        axs = [x for y in axs for x in y]
+
+        for i in range(len(n)):
+            counts = self.get_gram_label_counts(n[i], columns, splits)
+            z_statistics = self.get_z_statistics(counts)
+            X = {0: [], 1: [], 2: []}
+            for x in z_statistics.keys():
+                for label, z in z_statistics[x].items():
+                    X[label].append(z)
+
+            for label, values in X.items():
+                axs[i].hist(values, 30, histtype="step", label=label, density=True, range=(-10, 10))
+                axs[i].set_title(f"{n[i]}")
+
+        fig.supxlabel("z-score")
+        fig.supylabel("Count")
+        fig.legend(["Entailment", "Neutral", "Contradiction"], ncol=3, loc="upper center")
+        plt.show()
+
+
+
     def plot_artefacts(self, columns, splits):
         counts = self.get_token_label_counts(columns, splits)
         probs = self.get_emperical_label_probabilities(counts)
@@ -620,41 +773,43 @@ class NliAnalyzer:
         label_0 = np.argwhere(artefacts[:,0] == 0)[:,0]
         label_1 = np.argwhere(artefacts[:,0] == 1)[:,0]
         label_2 = np.argwhere(artefacts[:,0] == 2)[:,0]
-        print(len(label_0), len(label_1), len(label_2)) 
-        plt.scatter(artefacts[:,2][label_0], 
-                    artefacts[:,1][label_0], 
-                    label=self.class_names[0], 
-                    color="green", 
-                    s=2, 
-                    alpha=0.5, 
-                    marker='X')
-        plt.scatter(artefacts[:,2][label_1], 
-                    artefacts[:,1][label_1], 
-                    label=self.class_names[1], 
-                    color="orange", 
-                    s=2, 
-                    alpha=0.5)
-        plt.scatter(artefacts[:,2][label_2], 
-                    artefacts[:,1][label_2], 
-                    label=self.class_names[2], 
-                    color="red", 
-                    s=2, 
-                    alpha=0.5, 
-                    marker='s') 
+        #print(label_0)
+        #print(len(label_0), len(label_1), len(label_2))
+        print(len(label_0), len(label_1), len(label_2), len(label_0) + len(label_1) + len(label_2)) 
+        #plt.scatter(artefacts[:,2][label_0], 
+        #            artefacts[:,1][label_0], 
+        #            label=self.class_names[0], 
+        #            color="green", 
+        #            s=2, 
+        #            alpha=0.5, 
+        #            marker='X')
+        #plt.scatter(artefacts[:,2][label_1], 
+        #            artefacts[:,1][label_1], 
+        #            label=self.class_names[1], 
+        #            color="orange", 
+        #            s=2, 
+        #            alpha=0.5)
+        #plt.scatter(artefacts[:,2][label_2], 
+        #            artefacts[:,1][label_2], 
+        #            label=self.class_names[2], 
+        #            color="red", 
+        #            s=2, 
+        #            alpha=0.5, 
+        #            marker='s') 
         
-        texts = []
-        for text, data in zip(annotation_texts, annotations):
-            affix = "$^{}$".format(self.class_names[data[0]][:1])
-            texts.append(plt.text(data[2], data[1], text + affix))
+        #texts = []
+        #for text, data in zip(annotation_texts, annotations):
+        #    affix = "$^{}$".format(self.class_names[data[0]][:1])
+        #    texts.append(plt.text(data[2], data[1], text + affix))
 
-        adjust_text(texts)
-        plt.xscale("log")
-        plt.xlabel("n")
-        plt.ylabel(r"$\hat{p}(y|x_i)$")
-        plt.legend()
-        save_loc = f"{self.save_dir}/artefacts_{splits}" + self.get_save_affix()
-        plt.savefig(save_loc + ".png", dpi=600)
-        plt.close()
+        #adjust_text(texts)
+        #plt.xscale("log")
+        #plt.xlabel("n")
+        #plt.ylabel(r"$\hat{p}(y|x_i)$")
+        #plt.legend()
+        #save_loc = f"{self.save_dir}/artefacts_{splits}" + self.get_save_affix()
+        #plt.savefig(save_loc + ".png", dpi=600)
+        #plt.close()
 
 
     def export_pair_ids(self, splits):

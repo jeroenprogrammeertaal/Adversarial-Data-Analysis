@@ -6,7 +6,7 @@ from train_utils import Logger, DataProcessor
 from typing import Union
 from tqdm.auto import tqdm
 from torch.cuda.amp import GradScaler, autocast
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, AdamW
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, AdamW, AutoModelForCausalLM
 from transformers import get_constant_schedule, get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup
 from filter_modules import BertEncoder
 
@@ -32,6 +32,18 @@ def prepare_model(name:str):
         model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=3)
         tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         model.bert.encoder = BertEncoder(model.config)
+        return model, tokenizer
+    if name == "tiny_gpt2":
+        tokenizer = AutoTokenizer.from_pretrained("sshleifer/tiny-gpt2")
+        model = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-gpt2")
+        return model, tokenizer
+    if name == "distil_gpt2":
+        tokenizer = AutoTokenizer.from_pretrained("distilgpt2")
+        model = AutoModelForCausalLM.from_pretrained("distilgpt2")
+        return model, tokenizer
+    if name == "gpt2_large":
+        tokenizer = AutoTokenizer.from_pretrained("gpt2-large")
+        model = AutoModelForCausalLM.from_pretrained("gpt2-large")
         return model, tokenizer
 
 class Trainer:
