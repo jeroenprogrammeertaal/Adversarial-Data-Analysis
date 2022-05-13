@@ -8,7 +8,7 @@ from train_snli import prepare_model
 from collections import deque
 from sentence_transformers import SentenceTransformer, util
 from datasets import concatenate_datasets, DatasetDict
-from datasets.utils.logging import set_verbosity_error
+#from datasets.utils.logging import set_verbosity_error
 
 def add_cartography_data(analyzer, dataset, model, values, seeds):
     paths = []
@@ -33,7 +33,7 @@ def add_tree_based_metrics(analyzer, values, model):
     def parse_examples(examples, columns, **kwargs):
         results = {}
         for col in columns:
-            docs = list(model.pipe(examples[col]))
+            docs = list(model.pipe(examples[col], disable=["tok2vec","tagger","ner","lemmatizer","textcat"]))
             yngve = get_example_yngve(docs)
             parse_height = get_parse_tree_height(docs)
             hans = get_hans_heuristics(docs, examples, columns, **kwargs)
@@ -204,6 +204,39 @@ def add_ppl(analyzer, values, model, tokenizer):
         model=model,
         tokenizer=tokenizer
     )
+
+
+def add_cls_embedding(analyzer, seeds, dataset, model_name, values):
+    
+    def get_cls_example(examples, columns, **kwargs):
+        embeddings = encode_examples(
+            kwargs["model"],
+            kwargs["tokenizer"],
+            examples[columns[0]],
+            examples[columns[1]],
+            torch.device("cuda")
+        )
+        
+        return {
+                f"{kwargs['model_name']}_{kwargs['values']['split_groups']['train']}_seed={kwargs['seed']}": embeddings
+        }
+
+    for seed in seeds:
+        model, tokenizer = prepare_model(model_name)
+        path = f"results/{dataset}/{model_name}_{values['split_groups']['train']}_epoch=5_seed={seed}_batchsize=32_betas=(0.9, 0.999)lr=1e-05_weight_decay=0.01_warmup_steps=0.06.pt"
+        model.load_state_dict(torch.load(path))
+        model = model.to("cuda")
+        analyzer.processor.apply_operation(
+            values["columns"],
+            get_cls_example,
+            batched=True,
+            batch_size=16,
+            model=model,
+            tokenizer=tokenizer,
+            seed=seed,
+            values=values,
+            model_name=model_name
+        )
     
 def load_metric_model(metric):
     if metric == "parse_tree":
@@ -211,7 +244,8 @@ def load_metric_model(metric):
         model.add_pipe("benepar", config={"model": "benepar_en3"})
         return model
     elif metric == "cosine":
-        model = SentenceTransformer("all-mpnet-base-v2")
+        print(torch.cuda.is_available())
+        model = SentenceTransformer("all-MiniLM-L6-v2", device="cuda" if torch.cuda.is_available() else "cpu")
         return model
     elif metric == "perplexity":
         model, tokenizer = prepare_model("gpt2_large")
@@ -229,6 +263,7 @@ def load_analyzer(config):
         save_dir,
         whitespace_tokenizer,
         "whitespace",
+        load_from_disk=values["load_from_disk"],
         subsample_size = 0,
         correctness = "both"
     )
@@ -241,29 +276,32 @@ def load_analyzer(config):
     )
     
     # Cartography & PVI
-    add_cartography_data(analyzer, dataset, "roberta", values, [42])
-    add_pvi_data(analyzer, dataset, "roberta", values, [42])
+    #add_cartography_data(analyzer, dataset, "roberta", values, [42])
+    #add_pvi_data(analyzer, dataset, "roberta", values, [42])
 
     # Sequence_lengths
-    analyzer.get_sequence_lengths(values["columns"], batched=True)
+    #analyzer.get_sequence_lengths(values["columns"], batched=True)
 
     # Yngve, Tree height, Hans Heuristics
-    model = load_metric_model("parse_tree")
-    add_tree_based_metrics(analyzer, values, model)
-    del model
+    #model = load_metric_model("parse_tree")
+    #add_tree_based_metrics(analyzer, values, model)
+    #del model
 
     # Premise - Hypothesis token overlap & Cosine Similarity
-    model = load_metric_model("cosine")
-    add_premise_hypothesis_similarity(analyzer, values, model)
-    del model
+    #model = load_metric_model("cosine")
+    #print("MODEL DEVICE: ", next(model.parameters()).device)
+    #add_premise_hypothesis_similarity(analyzer, values, model)
+    #del model
 
     # Perplexity
-    model, tokenizer = load_metric_model("perplexity")
-    add_ppl(analyzer, values, model, tokenizer)
-    del model
-    del tokenizer
+    #model, tokenizer = load_metric_model("perplexity")
+    #add_ppl(analyzer, values, model, tokenizer)
+    #del model
+    #del tokenizer
+    add_cls_embedding(analyzer, [42], dataset, "tiny_bert", values)
+    print(analyzer.processor.dataset)
 
-    analyzer.processor.dataset.save_to_disk(f"data/metrics/{dataset}")
+    #analyzer.processor.dataset.save_to_disk(f"data/metrics/{dataset}")
 
 def build_batch_inputs(tokenizer, sequences, device):
     inputs = tokenizer(
@@ -292,23 +330,60 @@ def get_metrics(model, tokenizer, premises, hypotheses, device):
             cross_entropy = torch.mean(loss[j][shift_labels[j] != tokenizer.pad_token_id])
             losses[i].append(torch.exp(cross_entropy).item())
 
-    return losses     
+    return losses
+
+@torch.no_grad()
+def encode_examples(model, tokenizer, premises, hypotheses, device):
+    tokenized_sequences = tokenizer(
+        premises, 
+        hypotheses, 
+        add_special_tokens=True, 
+        padding="longest", 
+        truncation="only_first",
+        return_tensors="pt"
+    )
+
+    tokenized_sequences = {k: v.to(device) for k, v in tokenized_sequences.items()}
+
+    embeddings = model(**tokenized_sequences, output_hidden_states=True)
+    cls_embeddings = embeddings.hidden_states[-1][:, 0, :].to("cpu").numpy()
+    return cls_embeddings
 
 if __name__ == "__main__":
-    set_verbosity_error()
-
     configs = [
         {
             "cad_snli_combined": {
                 "columns": ["premise", "hypothesis"],
                 "splits": ["train", "validation", "test"],
+                "load_from_disk": None,
                 "split_groups": {
                     "train": ["train"],
                     "validation": ["validation"],
                     "test": ["test"]
                 }
             }
-        }
+        },
+        #{
+        #    "anli": {
+        #        "columns": ["premise", "hypothesis"],
+        #        "splits": ["train_r1", "train_r2", "train_r3", "dev_r1", "dev_r2", "dev_r3", "test_r1", "test_r2", "test_r3"],
+        #        "split_groups": {
+        #            "train": ["train_r1", "train_r2", "train_r3"],
+        #            "validation": ["dev_r1", "dev_r2", "dev_r3"],
+        #            "test": ["test_r1", "test_r2", "test_r3"]
+        #        }
+        #    }
+        #},
+        #{
+        #    "wanli": {
+        #        "columns": ["premise", "hypothesis"],
+        #        "splits": ["train", "test"],
+        #        "split_groups": {
+        #            "train": ["train"],
+        #            "test": ["test"]
+        #        }
+        #    }
+        #}
     ]
 
     load_analyzer(configs[0])
